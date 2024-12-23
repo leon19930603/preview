@@ -1,0 +1,245 @@
+
+<html>
+  <head>
+    <title>Image Preview</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+        line-height: 1.5;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin-top: 20px;
+      }
+      th,
+      td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+      }
+      th {
+        background-color: #f2f2f2;
+        font-weight: 600;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+      }
+      .image-dialog {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.8);
+        z-index: 1000;
+      }
+      .dialog-content {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+      }
+      .dialog-content img {
+        max-width: 90vw;
+        max-height: 90vh;
+      }
+      input[type="file"] {
+        font-size: 16px;
+        padding: 8px;
+        margin: 10px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="tableContainer"></div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls" />
+    <div id="imageDialog" class="image-dialog">
+      <div class="dialog-content">
+        <img id="dialogImage" src="" alt="Full size image" />
+      </div>
+    </div>
+
+    <script>
+      function excelSerialDateToJSDate(serial) {
+        const utc_days = Math.floor(serial - 25569);
+        const utc_value = utc_days * 86400;
+        const date_info = new Date(utc_value * 1000);
+
+        const fractional_day = serial - Math.floor(serial) + 0.0000001;
+        let total_seconds = Math.floor(86400 * fractional_day);
+
+        const seconds = total_seconds % 60;
+        total_seconds -= seconds;
+
+        const hours = Math.floor(total_seconds / (60 * 60));
+        const minutes = Math.floor(total_seconds / 60) % 60;
+
+        return `${date_info.getFullYear()}-${date_info.getMonth()}-${date_info.getDate()} ${hours}:${minutes}:${seconds}`;
+      }
+      const imageDialog = document.getElementById("imageDialog");
+      const dialogImage = document.getElementById("dialogImage");
+      let currentImageIndex = 0;
+      let allImages = [];
+      let scrollInterval;
+      let scrollSpeed = 10; // 每次滚动的像素数
+      let scrollDelay = 300; // 滚动间隔时间(毫秒)
+
+      function toggleAutoScroll() {
+        if (scrollInterval) {
+          clearInterval(scrollInterval);
+          scrollInterval = null;
+        } else {
+          scrollInterval = setInterval(() => {
+            // 检查是否已经滚动到底部
+            if (
+              window.innerHeight + window.scrollY >=
+              document.documentElement.scrollHeight
+            ) {
+              clearInterval(scrollInterval);
+              scrollInterval = null;
+              return;
+            }
+            window.scrollBy(0, scrollSpeed);
+          }, scrollDelay);
+        }
+      }
+
+      document.addEventListener("keydown", function (e) {
+        if (e.code === "Space") {
+          e.preventDefault(); // 防止空格键滚动页面
+          toggleAutoScroll();
+        }
+
+        if (imageDialog.style.display === "block") {
+          if (e.key === "Escape") {
+            imageDialog.style.display = "none";
+          } else if (e.key === "ArrowLeft") {
+            showPreviousImage();
+          } else if (e.key === "ArrowRight") {
+            showNextImage();
+          }
+        }
+      });
+
+      imageDialog.addEventListener("click", function (e) {
+        if (e.target === imageDialog) {
+          imageDialog.style.display = "none";
+        }
+      });
+
+      document
+        .getElementById("fileInput")
+        .addEventListener("change", function (e) {
+          const file = e.target.files[0];
+          const reader = new FileReader();
+
+          reader.onload = function (e) {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: "array" });
+            console.log(workbook.SheetNames);
+
+            // Create sheet selector dropdown
+            const sheetSelector = document.createElement("select");
+            sheetSelector.style.margin = "10px 0";
+            sheetSelector.style.padding = "8px";
+            sheetSelector.style.fontSize = "16px";
+            const option = document.createElement("option");
+            option.value = "-1";
+            option.textContent = "All";
+            sheetSelector.appendChild(option);
+            workbook.SheetNames.forEach((name, index) => {
+              const option = document.createElement("option");
+              option.value = index;
+              option.textContent = name;
+              sheetSelector.appendChild(option);
+            });
+            document.getElementById("tableContainer").innerHTML = "";
+            document
+              .getElementById("tableContainer")
+              .appendChild(sheetSelector);
+
+            // Handle sheet selection change
+            sheetSelector.addEventListener("change", (e) => {
+              const firstSheet =
+                workbook.Sheets[workbook.SheetNames[e.target.value]];
+
+              const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+              allImages = [];
+
+              let processedTable = "<table><tr>";
+
+              // Add index header
+              processedTable += "<th>#</th>";
+
+              console.log(jsonData);
+
+              const headers = Object.keys(jsonData[0]);
+              console.log(headers);
+              headers.forEach((header) => {
+                processedTable += `<th>${header}</th>`;
+              });
+              processedTable += "</tr>";
+
+              jsonData.forEach((row, index) => {
+                processedTable += "<tr>";
+                // Add index column starting from 1
+                processedTable += `<td>${index + 1}</td>`;
+                headers.forEach((header) => {
+                  let value = `${row[header] || ""}`;
+                  if (value.indexOf("cloudfront.net") > -1) {
+                    allImages.push(value);
+                    value = `<img loading="lazy" src="${value}" alt="Image Preview" width="250" onclick="showFullImage('${value}')">`;
+                  }
+                  // 生图时间应该是日期，但是现在有点文图都是数字，需要转换成日期，帮我修复下
+                  if (header.includes("服装名称") && value === "") {
+                    value = "无";
+                  }
+                  if (header.includes("生图时间") && value !== "") {
+                    value = `<div style="white-space: nowrap">${excelSerialDateToJSDate(value)}</div>`;
+                  }
+                  processedTable += `<td>${value}</td>`;
+                });
+                processedTable += "</tr>";
+              });
+              processedTable += "</table>";
+
+              document.getElementById("tableContainer").innerHTML =
+                processedTable;
+            });
+          };
+
+          reader.readAsArrayBuffer(file);
+        });
+
+      function showFullImage(src) {
+        currentImageIndex = allImages.indexOf(src);
+        dialogImage.src = src;
+        imageDialog.style.display = "block";
+        scrollToThumbnail(src);
+      }
+
+      function showPreviousImage() {
+        if (allImages.length > 0) {
+          currentImageIndex =
+            (currentImageIndex - 1 + allImages.length) % allImages.length;
+          dialogImage.src = allImages[currentImageIndex];
+          scrollToThumbnail(allImages[currentImageIndex]);
+        }
+      }
+
+      function showNextImage() {
+        if (allImages.length > 0) {
+          currentImageIndex = (currentImageIndex + 1) % allImages.length;
+          dialogImage.src = allImages[currentImageIndex];
+          scrollToThumbnail(allImages[currentImageIndex]);
+        }
+      }
+
+      function scrollToThumbnail(src) {}
+    </script>
+  </body>
+</html>
